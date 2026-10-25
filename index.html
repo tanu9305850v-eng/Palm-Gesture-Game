@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gesture Particle System</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #1a1a2e; font-family: sans-serif; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        .ui-overlay { position: absolute; width: 100%; height: 100%; pointer-events: none; z-index: 10; display: flex; flex-direction: column; justify-content: space-between; align-items: center; padding: 40px; }
+        .title-section { text-align: center; color: white; }
+        .main-title { font-size: 2.5rem; font-weight: bold; margin-bottom: 10px; text-shadow: 0 0 10px rgba(0,0,0,0.5); }
+        .controls-panel { display: flex; gap: 10px; pointer-events: auto; }
+        .control-btn { padding: 12px 20px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); border-radius: 30px; color: white; cursor: pointer; backdrop-filter: blur(5px); transition: 0.3s; }
+        .control-btn.active { background: rgba(255,255,255,0.4); border-color: white; }
+        .status-indicator { position: absolute; top: 20px; right: 20px; color: white; background: rgba(0,0,0,0.5); padding: 8px 15px; border-radius: 20px; font-size: 12px; }
+        #video { display: none; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    
+    <div class="ui-overlay">
+        <div class="title-section">
+            <div class="main-title">Gesture Magic</div>
+            <div class="instruction">Wave your hand to move the light ✨</div>
+        </div>
+
+        <div class="controls-panel">
+            <button class="control-btn active" data-type="hearts">❤️ Hearts</button>
+            <button class="control-btn" data-type="flowers">🌸 Flowers</button>
+            <button class="control-btn" data-type="stars">⭐ Stars</button>
+            <button class="control-btn" data-type="fire">🔥 Fire</button>
+        </div>
+    </div>
+
+    <div class="status-indicator">Camera: <span id="status">Starting...</span></div>
+    <video id="video"></video>
+
+    <script>
+        let scene, camera, renderer, particleSystem;
+        let handX = 0, handY = 0, isHandVisible = false;
+
+        const config = {
+            hearts: { color: 0xff4d6d, size: 1.5, count: 1500 },
+            flowers: { color: 0xffb7ff, size: 1.2, count: 1200 },
+            stars: { color: 0xfff3b0, size: 0.8, count: 2000 },
+            fire: { color: 0xff9100, size: 2.0, count: 1000 }
+        };
+
+        function initThree() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 50;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            createParticles('hearts');
+            animate();
+        }
+
+        function createCircleTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');
+            gradient.addColorStop(0.2, 'rgba(255,255,255,0.8)');
+            gradient.addColorStop(1, 'rgba(255,255,255,0)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 64, 64);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        function createParticles(type) {
+            if (particleSystem) scene.remove(particleSystem);
+
+            const settings = config[type];
+            const geometry = new THREE.BufferGeometry();
+            const pos = [];
+            const velocities = [];
+
+            for (let i = 0; i < settings.count; i++) {
+                pos.push((Math.random() - 0.5) * 120, (Math.random() - 0.5) * 80, (Math.random() - 0.5) * 50);
+                velocities.push((Math.random() - 0.5) * 0.05, (Math.random() - 0.5) * 0.05, (Math.random() - 0.5) * 0.05);
+            }
+
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+            
+            const material = new THREE.PointsMaterial({
+                size: settings.size,
+                color: settings.color,
+                transparent: true,
+                opacity: 0.7,
+                map: createCircleTexture(),
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+
+            particleSystem = new THREE.Points(geometry, material);
+            particleSystem.userData.velocities = velocities;
+            scene.add(particleSystem);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const positions = particleSystem.geometry.attributes.position.array;
+            const vels = particleSystem.userData.velocities;
+
+            for (let i = 0; i < positions.length; i += 3) {
+                // Apply movement
+                positions[i] += vels[i];
+                positions[i+1] += vels[i+1];
+                positions[i+2] += vels[i+2];
+
+                // Hand Interaction (Attraction/Repulsion)
+                if (isHandVisible) {
+                    const dx = handX - positions[i];
+                    const dy = handY - positions[i+1];
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    
+                    if (dist < 25) {
+                        const force = (25 - dist) * 0.02;
+                        vels[i] += dx * force;
+                        vels[i+1] += dy * force;
+                    }
+                }
+
+                // Friction & Bounds
+                vels[i] *= 0.95;
+                vels[i+1] *= 0.95;
+                vels[i+2] *= 0.95;
+
+                if (Math.abs(positions[i]) > 70) positions[i] *= -0.9;
+                if (Math.abs(positions[i+1]) > 50) positions[i+1] *= -0.9;
+            }
+
+            particleSystem.geometry.attributes.position.needsUpdate = true;
+            renderer.render(scene, camera);
+        }
+
+        // --- MediaPipe Hand Tracking ---
+        async function setupHands() {
+            const video = document.getElementById('video');
+            const hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6 });
+            hands.onResults(results => {
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    isHandVisible = true;
+                    const landmark = results.multiHandLandmarks[0][8]; // Index finger tip
+                    
+                    // Correct Coordinate Mapping:
+                    // MediaPipe (0 to 1) -> Three.js (approx -60 to 60)
+                    handX = (0.5 - landmark.x) * 110; 
+                    handY = (0.5 - landmark.y) * 70;
+                    document.getElementById('status').textContent = "Tracking...";
+                } else {
+                    isHandVisible = false;
+                    document.getElementById('status').textContent = "Hand not found";
+                }
+            });
+
+            const cameraUtils = new Camera(video, {
+                onFrame: async () => { await hands.send({image: video}); },
+                width: 640, height: 480
+            });
+            cameraUtils.start();
+        }
+
+        // UI Listeners
+        document.querySelectorAll('.control-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.control-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                createParticles(btn.dataset.type);
+            });
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        initThree();
+        setupHands();
+    </script>
+</body>
+</html>
